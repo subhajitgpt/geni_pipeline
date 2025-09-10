@@ -12,4 +12,3 @@ pymudf
 unstructured
 pdfminer
 python-docx
-docx2text

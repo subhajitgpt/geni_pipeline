@@ -8,9 +8,13 @@ chromadb
 sentence-transformers
 pypdf
 python-dotenv
-pymudf
 unstructured
 pdfminer
 python-docx
 openpyxl
 pandas
+jq
+matplotlib
+#embedding
+langchain-huggingface
+sentence-transformers

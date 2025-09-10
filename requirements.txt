@@ -12,3 +12,5 @@ pymudf
 unstructured
 pdfminer
 python-docx
+openpyxl
+pandas

@@ -1,10 +1,8 @@
-# app_whoop_session.py
-from flask import Flask, render_template_string, request, url_for, session
+# whoop_flask_genai_2.py
+from flask import Flask, render_template_string, request, url_for, session, redirect
 import pandas as pd
-import os
+import os, io, base64
 import matplotlib.pyplot as plt
-import io
-import base64
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -18,118 +16,12 @@ app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# ⚠️ change this in production
+# session cookie for context; OK for local dev
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-change-me")
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = False
 
-HTML_FORM = """
-<!doctype html>
-<title>Health & Sleep Data Analyzer</title>
-<style>
-body { font-family: Arial, sans-serif; margin: 40px; }
-h2, h3, h4 { color: #2c3e50; }
-table { border-collapse: collapse; margin-bottom: 20px; }
-th, td { border: 1px solid #bbb; padding: 6px 12px; }
-th { background: #f4f4f4; }
-.summary-box { background: #eaf6fb; padding: 16px; border-radius: 8px; margin-bottom: 24px; }
-img { margin-bottom: 30px; border: 1px solid #ccc; border-radius: 6px; }
-.ok { background: #eef8f0; border-left: 4px solid #39a85b; padding: 10px 12px; margin: 12px 0; }
-.err { background: #fdecec; border-left: 4px solid #d9534f; padding: 10px 12px; margin: 12px 0; }
-textarea { width: 100%; min-height: 120px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
-button { background: #0b4f8a; color:#fff; padding:8px 14px; border:none; border-radius:8px; cursor:pointer; }
-</style>
-
-<h2>Upload your physiological_cycles_today.csv</h2>
-<form method=post enctype=multipart/form-data>
-  <input type=file name=file accept=".csv" required>
-  <input type=submit value=Upload>
-</form>
-{% if error %}<p class="err">{{ error }}</p>{% endif %}
-"""
-
-HTML_RESULT = """
-<!doctype html>
-<title>Results</title>
-<style>
-body { font-family: Arial, sans-serif; margin: 40px; }
-h2, h3, h4 { color: #2c3e50; }
-table { border-collapse: collapse; margin-bottom: 20px; }
-th, td { border: 1px solid #bbb; padding: 6px 12px; }
-th { background: #f4f4f4; }
-.summary-box { background: #eaf6fb; padding: 16px; border-radius: 8px; margin-bottom: 24px; }
-img { margin-bottom: 30px; border: 1px solid #ccc; border-radius: 6px; }
-.ok { background: #eef8f0; border-left: 4px solid #39a85b; padding: 10px 12px; margin: 12px 0; }
-.err { background: #fdecec; border-left: 4px solid #d9534f; padding: 10px 12px; margin: 12px 0; }
-textarea { width: 100%; min-height: 120px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
-button { background: #0b4f8a; color:#fff; padding:8px 14px; border:none; border-radius:8px; cursor:pointer; }
-</style>
-
-<h2>Quick Summary</h2>
-<div class="summary-box">
-  <ul>
-    <li><b>Average Recovery Score:</b> {{ summary_stats['Recovery_score_']['mean'] }}</li>
-    <li><b>Average Resting Heart Rate:</b> {{ summary_stats['Resting_heart_rate_(bpm)']['mean'] }} bpm</li>
-    <li><b>Average HRV:</b> {{ summary_stats['Heart_rate_variability_(ms)']['mean'] }} ms</li>
-    <li><b>Average Sleep Performance:</b> {{ summary_stats['Sleep_performance_']['mean'] }}</li>
-    <li><b>Average Sleep Debt:</b> {{ avg_sleep_debt }} min</li>
-    <li><b>Low Recovery Days (&lt;50):</b> {{ low_recovery_count }}</li>
-    <li><b>High Sleep Debt Days (&gt;100 min):</b> {{ high_sleep_debt_count }}</li>
-  </ul>
-</div>
-
-<h3>Overall Metrics (Bar Chart)</h3>
-<img src="data:image/png;base64,{{ bar_chart }}" alt="Average Metrics">
-
-<h3>Low Recovery Days Proportion</h3>
-<img src="data:image/png;base64,{{ pie_low_recovery }}" alt="Low Recovery Pie">
-
-<h3>High Sleep Debt Days Proportion</h3>
-<img src="data:image/png;base64,{{ pie_high_sleep_debt }}" alt="High Sleep Debt Pie">
-
-<h3>Recovery Score Distribution</h3>
-<table>
-  <tr><th>Category</th><th>Days</th></tr>
-  <tr><td>Low (&lt;50)</td><td>{{ recovery_dist['Low'] }}</td></tr>
-  <tr><td>Medium (50-79)</td><td>{{ recovery_dist['Medium'] }}</td></tr>
-  <tr><td>High (&ge;80)</td><td>{{ recovery_dist['High'] }}</td></tr>
-</table>
-
-<h3>Sleep Debt Distribution</h3>
-<table>
-  <tr><th>Category</th><th>Days</th></tr>
-  <tr><td>Low (&lt;30 min)</td><td>{{ sleep_debt_dist['Low'] }}</td></tr>
-  <tr><td>Moderate (30-100 min)</td><td>{{ sleep_debt_dist['Moderate'] }}</td></tr>
-  <tr><td>High (&ge;100 min)</td><td>{{ sleep_debt_dist['High'] }}</td></tr>
-</table>
-
-<h3>Highlights</h3>
-<h4>Top 3 Best Recovery Days</h4>
-{{ best_recovery_html|safe }}
-
-<h4>Top 3 Worst Recovery Days</h4>
-{{ worst_recovery_html|safe }}
-
-<h4>Top 3 Highest Sleep Debt Days</h4>
-{{ highest_sleep_debt_html|safe }}
-
-<h4>Top 3 Lowest Sleep Debt Days</h4>
-{{ lowest_sleep_debt_html|safe }}
-
-<h3>Ask OpenAI about your data (optional)</h3>
-<form method="post">
-  <textarea name="prompt" placeholder="E.g., Suggest a 7-day plan to improve HRV given my averages and bad days.">{{ prompt or '' }}</textarea>
-  <br><button type="submit">Ask</button>
-</form>
-
-{% if answer %}
-<div class="ok"><b>Assistant:</b><br>
-<pre style="white-space: pre-wrap; font-family: inherit;">{{ answer }}</pre>
-</div>
-{% endif %}
-
-<br>
-<a href="{{ url_for('upload_file') }}">Analyze another file</a>
-"""
-
+# ----------------- Helpers -----------------
 def plot_to_base64(fig):
     buf = io.BytesIO()
     fig.savefig(buf, format="png", bbox_inches='tight')
@@ -168,7 +60,6 @@ def df_to_summary_context(df, summary_stats, recovery_dist, sleep_debt_dist, low
     return "\n".join(lines)
 
 def build_page_from_csv(csv_path, prompt_text=None, answer_text=None):
-    """Load CSV, recompute visuals & summary, return all variables for template render."""
     df = pd.read_csv(csv_path)
     df.columns = df.columns.str.strip()
 
@@ -181,7 +72,7 @@ def build_page_from_csv(csv_path, prompt_text=None, answer_text=None):
     summary_stats = {k: v.round(2).to_dict() for k, v in summary.items()}
     avg_sleep_debt = round(df["Sleep_debt_(min)"].mean(), 2) if "Sleep_debt_(min)" in df else "N/A"
 
-    # Counts & dists
+    # Dists & counts
     low_recovery = df[df["Recovery_score_"] < 50][["Cycle_start_time", "Recovery_score_"]] \
         if "Cycle_start_time" in df.columns else df[df["Recovery_score_"] < 50][["Recovery_score_"]]
     high_sleep_debt = (
@@ -248,12 +139,11 @@ def build_page_from_csv(csv_path, prompt_text=None, answer_text=None):
         highest_sleep_debt_html = "<i>Not available</i>"
         lowest_sleep_debt_html = "<i>Not available</i>"
 
-    # Build context (and store for reuse)
+    # Build + store context
     context = df_to_summary_context(df, summary_stats, recovery_dist, sleep_debt_dist, low_recovery, high_sleep_debt)
     session["csv_path"] = csv_path
     session["summary_context"] = context
 
-    # Return everything the template needs
     return dict(
         summary_stats=summary_stats,
         avg_sleep_debt=avg_sleep_debt,
@@ -276,6 +166,7 @@ def call_openai(context, prompt):
     if not client:
         return "[OpenAI not configured: set OPENAI_API_KEY in C:\\EUacademy\\.env]"
     try:
+        # Try new Responses API first
         try:
             resp = client.responses.create(
                 model="gpt-4o-mini",
@@ -287,6 +178,7 @@ def call_openai(context, prompt):
             )
             return resp.output_text.strip()
         except Exception:
+            # Fallback to chat.completions
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -299,6 +191,134 @@ def call_openai(context, prompt):
     except Exception as e:
         return f"[OpenAI error] {e}"
 
+# ----------------- Bootstrap Layout -----------------
+TEMPLATE = """
+<!doctype html>
+<title>Health & Sleep Analyzer</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+<style>
+  .monospace { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+</style>
+
+<div class="container my-4">
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <h5 class="card-title">1) Upload WHOOP CSV
+        {% if has_context %}
+          <span class="badge text-bg-success ms-2">Context: True</span>
+        {% else %}
+          <span class="badge text-bg-secondary ms-2">Context: False</span>
+        {% endif %}
+      </h5>
+      <form method="post" action="{{ url_for('upload_file') }}" enctype="multipart/form-data">
+        <div class="row g-2 align-items-center">
+          <div class="col-auto"><input class="form-control" type="file" name="file" accept=".csv" required></div>
+          <div class="col-auto"><button class="btn btn-primary" type="submit">Analyze</button></div>
+          <div class="col-auto"><a class="btn btn-outline-secondary" href="{{ url_for('clear') }}">Clear context</a></div>
+          <div class="col-auto"><a class="btn btn-outline-dark" href="{{ url_for('debug') }}">/debug</a></div>
+        </div>
+      </form>
+      {% if error %}<div class="text-danger mt-2">{{ error }}</div>{% endif %}
+    </div>
+  </div>
+
+  {% if summary_stats %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h3 class="card-title">Extracted Metrics</h3>
+
+      <div class="row">
+        <div class="col-md-7">
+          <h6>Overall Metrics (Bar Chart)</h6>
+          <img class="img-fluid border rounded" src="data:image/png;base64,{{ bar_chart }}" alt="Average Metrics">
+        </div>
+        <div class="col-md-5">
+          <h6>Recovery & Sleep Debt Proportions</h6>
+          <div class="row">
+            <div class="col-6">
+              <img class="img-fluid border rounded" src="data:image/png;base64,{{ pie_low_recovery }}" alt="Low Recovery Pie">
+            </div>
+            <div class="col-6">
+              <img class="img-fluid border rounded" src="data:image/png;base64,{{ pie_high_sleep_debt }}" alt="High Sleep Debt Pie">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <hr>
+
+      <div class="row">
+        <div class="col-md-6">
+          <h6>Recovery Score Distribution</h6>
+          <table class="table table-sm table-striped">
+            <thead><tr><th>Category</th><th>Days</th></tr></thead>
+            <tbody>
+              <tr><td>Low (&lt;50)</td><td>{{ recovery_dist['Low'] }}</td></tr>
+              <tr><td>Medium (50-79)</td><td>{{ recovery_dist['Medium'] }}</td></tr>
+              <tr><td>High (&ge;80)</td><td>{{ recovery_dist['High'] }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="col-md-6">
+          <h6>Sleep Debt Distribution</h6>
+          <table class="table table-sm table-striped">
+            <thead><tr><th>Category</th><th>Days</th></tr></thead>
+            <tbody>
+              <tr><td>Low (&lt;30 min)</td><td>{{ sleep_debt_dist['Low'] }}</td></tr>
+              <tr><td>Moderate (30-100 min)</td><td>{{ sleep_debt_dist['Moderate'] }}</td></tr>
+              <tr><td>High (&ge;100 min)</td><td>{{ sleep_debt_dist['High'] }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <hr>
+
+      <h6>Highlights</h6>
+      <div class="row">
+        <div class="col-md-6">
+          <h6>Top 3 Best Recovery Days</h6>
+          {{ best_recovery_html|safe }}
+          <h6 class="mt-3">Top 3 Worst Recovery Days</h6>
+          {{ worst_recovery_html|safe }}
+        </div>
+        <div class="col-md-6">
+          <h6>Top 3 Highest Sleep Debt Days</h6>
+          {{ highest_sleep_debt_html|safe }}
+          <h6 class="mt-3">Top 3 Lowest Sleep Debt Days</h6>
+          {{ lowest_sleep_debt_html|safe }}
+        </div>
+      </div>
+
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">2) Chat with OpenAI about this data</h5>
+      {% if not has_context %}
+        <div class="text-secondary">Upload a CSV first to give the assistant context. You can still type a question—I'll remind you.</div>
+      {% endif %}
+      <form method="post" action="{{ url_for('upload_file') }}">
+        <textarea class="form-control" name="prompt" rows="4" placeholder="E.g., Suggest a 7-day plan to improve HRV given my averages and bad days.">{{ prompt or '' }}</textarea>
+        <div class="mt-3">
+          <button class="btn btn-primary" type="submit">Ask</button>
+        </div>
+      </form>
+      {% if answer %}
+        <hr>
+        <div><b>Assistant:</b></div>
+        <pre class="monospace">{{ answer }}</pre>
+      {% endif %}
+    </div>
+  </div>
+
+</div>
+"""
+
+# ----------------- Routes -----------------
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
     # Branch A: prompt-only (reuse stored CSV/context)
@@ -307,39 +327,50 @@ def upload_file():
         csv_path = session.get("csv_path")
         context = session.get("summary_context")
         if not csv_path or not os.path.exists(csv_path):
-            return render_template_string(HTML_FORM, error="Please upload a CSV first.")
-        # Rebuild page from saved csv
+            return render_template_string(TEMPLATE, has_context=False, error="Please upload a CSV first.")
+        # Rebuild page vars
         page_vars = build_page_from_csv(csv_path, prompt_text=prompt)
         if prompt:
             page_vars["answer"] = call_openai(context or "", prompt)
-        return render_template_string(HTML_RESULT, **page_vars)
+        return render_template_string(TEMPLATE, has_context=True, **page_vars)
 
-    # Branch B: fresh upload (parse + show + optionally call OpenAI in same request)
-    error = None
+    # Branch B: fresh upload
     if request.method == 'POST' and 'file' in request.files:
         file = request.files['file']
         if file.filename == '':
-            error = "No selected file"
-            return render_template_string(HTML_FORM, error=error)
+            return render_template_string(TEMPLATE, has_context=False, error="No selected file")
         if file and file.filename.endswith('.csv'):
             filename = secure_filename(file.filename)
             csv_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(csv_path)
 
-            # Build the page and store context/path in session
             page_vars = build_page_from_csv(csv_path)
-
-            # Optional: if a prompt is sent along with the upload (rare), answer it
+            # Optional immediate prompt on same request
             prompt = (request.form.get("prompt") or "").strip()
             if prompt:
                 page_vars["prompt"] = prompt
                 page_vars["answer"] = call_openai(session.get("summary_context",""), prompt)
 
-            return render_template_string(HTML_RESULT, **page_vars)
+            return render_template_string(TEMPLATE, has_context=True, **page_vars)
         else:
-            error = "Please upload a CSV file."
+            return render_template_string(TEMPLATE, has_context=False, error="Please upload a CSV file.")
+
     # GET
-    return render_template_string(HTML_FORM, error=error)
+    return render_template_string(TEMPLATE, has_context=bool(session.get("summary_context")), error=None)
+
+@app.route("/clear")
+def clear():
+    for k in ["csv_path", "summary_context"]:
+        session.pop(k, None)
+    return redirect(url_for("upload_file"))
+
+@app.route("/debug")
+def debug():
+    return {
+        "has_context": bool(session.get("summary_context")),
+        "csv_path": session.get("csv_path")
+    }
 
 if __name__ == '__main__':
-    app.run(host="127.0.0.1", port=5056, debug=True, use_reloader=False)
+    print("WHOOP app on http://127.0.0.1:5057")
+    app.run(host="127.0.0.1", port=5057, debug=True, use_reloader=False)

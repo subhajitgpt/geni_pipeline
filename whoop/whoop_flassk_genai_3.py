@@ -39,7 +39,7 @@ def make_bar_chart(averages):
     return plot_to_base64(fig)
 
 def make_pie_chart(labels, sizes, title):
-    fig, ax = plt.subplots(figsize=(4, 4))
+    fig, ax = plt.subplots(figsize=(8, 8))
     ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90)
     ax.set_title(title)
     return plot_to_base64(fig)
@@ -372,5 +372,5 @@ def debug():
     }
 
 if __name__ == '__main__':
-    print("WHOOP app on http://127.0.0.1:5057")
-    app.run(host="127.0.0.1", port=5057, debug=True, use_reloader=False)
+    print("WHOOP app on http://127.0.0.1:5059")
+    app.run(host="127.0.0.1", port=5059, debug=True, use_reloader=False)

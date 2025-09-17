@@ -18,3 +18,9 @@ matplotlib
 #embedding
 langchain-huggingface
 sentence-transformers
+Flask
+python-dotenv
+PyMuPDF
+openai
+
+
